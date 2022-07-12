@@ -26,14 +26,12 @@ exp_name = f'{os.path.basename(__file__).rstrip(".py")}_{datetime.now().strftime
 writer = SummaryWriter(f"runs/{exp_name}")
 
 
-def train(epoch, train_loader, valid_loader, criterion, scheduler, start, mel_spectogram):
+def train(epoch, train_loader, valid_loader, criterion, scheduler, start):
     train_loss = 0
     train_accuracy = 0
     model.train()
     epoch_start = time.time()
-    for i, (audio, label) in enumerate(train_loader, 1):
-        audio, label = audio.to(device), label.to(device)
-        spectogram = mel_spectogram(audio)
+    for i, (spectogram, label) in enumerate(train_loader, 1):
         pred = model(spectogram)
         loss = criterion(pred, label)
         train_loss += loss.data.item()
@@ -59,10 +57,8 @@ def train(epoch, train_loader, valid_loader, criterion, scheduler, start, mel_sp
     valid_epoch_target = []
     model.eval()
     with torch.no_grad():
-        for i, (audio, label) in enumerate(valid_loader, 1):
-            audio, label = audio.to(device), label.to(device)
-            spectogram = mel_spectogram(audio)
-            pred = model(spectogram)
+        for i, (spectrogram, label) in enumerate(valid_loader, 1):
+            pred = model(spectrogram)
             loss = criterion(pred, label)
             valid_loss += loss.data.item()
             valid_accuracy += accuracy(pred, label)
@@ -77,16 +73,16 @@ def train(epoch, train_loader, valid_loader, criterion, scheduler, start, mel_sp
                                                                                100 * valid_accuracy/len(valid_loader.dataset), 0))
     return
 
-def collate_fn(batch, labels_list):
+def collate_fn(batch, labels_list, mel_spectrogram, device):
     audios, labels = [], []
     for audio, _, label, *_ in batch:
         audios.append(audio.flatten())
         labels.append(torch.tensor(labels_list.index(label)))
-
-    audios_padded = torch.nn.utils.rnn.pad_sequence(audios, batch_first=True, padding_value=0.)
-    labels = torch.stack(labels)
+    audios_padded = torch.nn.utils.rnn.pad_sequence(audios, batch_first=True, padding_value=0.).to(device)
+    labels = torch.stack(labels).to(device)
     audios_padded = audios_padded.unsqueeze(1)
-    return audios_padded, labels
+    spectrogram = mel_spectrogram(audios_padded)
+    return spectrogram, labels
 
 
 
@@ -97,9 +93,9 @@ if __name__ == '__main__':
     mel_spectrogram = torchaudio.transforms.MelSpectrogram().to(device)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
-                                               shuffle=True,  collate_fn=lambda batch: collate_fn(batch, labels))
+                                               shuffle=True,  collate_fn=lambda batch: collate_fn(batch, labels, mel_spectrogram, device))
     valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size,
-                                               shuffle=True, collate_fn=lambda batch: collate_fn(batch, labels))
+                                               shuffle=True, collate_fn=lambda batch: collate_fn(batch, labels, mel_spectrogram, device))
     print(f"train loader {len(train_loader)}")
     print(f"valid loader {len(valid_loader)}")
 
@@ -116,7 +112,7 @@ if __name__ == '__main__':
     start = time.time()
     print("Training for %d epochs..." % args.epochs)
     for epoch in range(1, args.epochs + 1):
-        train(epoch, train_loader, valid_loader, criterion, scheduler, start, mel_spectrogram)
+        train(epoch, train_loader, valid_loader, criterion, scheduler, start)
 
     #save_model(model)
 
