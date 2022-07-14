@@ -21,10 +21,12 @@ parser.add_argument('--data-dir', default="data", help='')
 
 args = parser.parse_args(args=[])
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 exp_name = f'{os.path.basename(__file__).rstrip(".py")}_{datetime.now().strftime("%m-%d-%Y_%H:%M:%S")}'
 writer = SummaryWriter(f"runs/{exp_name}")
-
+writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
+    '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 
 def train(epoch, train_loader, valid_loader, criterion, scheduler, start):
     train_loss = 0
@@ -73,7 +75,7 @@ def train(epoch, train_loader, valid_loader, criterion, scheduler, start):
                                                                                100 * valid_accuracy/len(valid_loader.dataset), 0))
     return
 
-def collate_fn(batch, labels_list, mel_spectrogram, device):
+def collate_fn(batch, labels_list, transforms, device):
     audios, labels = [], []
     for audio, _, label, *_ in batch:
         audios.append(audio.flatten())
@@ -81,7 +83,7 @@ def collate_fn(batch, labels_list, mel_spectrogram, device):
     audios_padded = torch.nn.utils.rnn.pad_sequence(audios, batch_first=True, padding_value=0.).to(device)
     labels = torch.stack(labels).to(device)
     audios_padded = audios_padded.unsqueeze(1)
-    spectrogram = mel_spectrogram(audios_padded)
+    spectrogram = transforms(audios_padded)
     return spectrogram, labels
 
 
@@ -90,16 +92,24 @@ if __name__ == '__main__':
     train_dataset = SCDataset("training")
     valid_dataset = SCDataset("testing")
     labels = sorted(list(set(datapoint[2] for datapoint in train_dataset)))
-    mel_spectrogram = torchaudio.transforms.MelSpectrogram().to(device)
+
+    train_transforms = nn.Sequential(
+        torchaudio.transforms.MelSpectrogram(),
+        torchaudio.transforms.AmplitudeToDB(),
+    ).to(device)
+
+    valid_transforms = nn.Sequential(
+        torchaudio.transforms.MelSpectrogram(),
+        torchaudio.transforms.AmplitudeToDB(),
+    ).to(device)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
-                                               shuffle=True,  collate_fn=lambda batch: collate_fn(batch, labels, mel_spectrogram, device))
+                                               shuffle=True,  collate_fn=lambda batch: collate_fn(batch, labels, train_transforms, device))
     valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size,
-                                               shuffle=True, collate_fn=lambda batch: collate_fn(batch, labels, mel_spectrogram, device))
+                                               shuffle=True, collate_fn=lambda batch: collate_fn(batch, labels, valid_transforms, device))
     print(f"train loader {len(train_loader)}")
     print(f"valid loader {len(valid_loader)}")
 
-    #model = CNN(num_class=len(labels)).to(device)
     model = Cnn(1, len(labels)).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
