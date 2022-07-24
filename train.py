@@ -55,7 +55,9 @@ def train(train_loader, valid_loader, optim, criterion, scheduler, start):
                                                                                                   epoch, train_loss,
                                                                                                   100 * train_accuracy/len(train_loader.dataset),
                                                                                                   int((time.time() - epoch_start))))
-
+        for name, weight in model.named_parameters():
+            writer.add_histogram(name,weight, epoch)
+            writer.add_histogram(f'{name}.grad',weight.grad, epoch)
         writer.add_scalar("train/spe", int((time.time() - epoch_start)), epoch)
         writer.add_scalar("train/loss", train_loss, epoch)
         writer.add_scalar("train/accuracy", 100 * train_accuracy/len(train_loader.dataset), epoch)
@@ -117,6 +119,7 @@ if __name__ == '__main__':
 
     model = Cnn(1, len(labels)).to(device)
     model.apply(weight_init)
+    print(f"Model has {sum([p.numel() for p in model.parameters()]):,d} parameters.")
     optim = torch.optim.Adam(model.parameters(), lr=cfg.net.optim.lr)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optim, max_lr=cfg.net.optim.lr,
                                                     steps_per_epoch=int(len(train_loader)),
