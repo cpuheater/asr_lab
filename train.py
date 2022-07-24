@@ -4,7 +4,7 @@ from datetime import datetime
 import time
 import torch
 import torch.nn as nn
-from src.model import Cnn
+from src.model import Cnn, weight_init
 from src.dataset import SCDataset
 import os
 from src.utils import save_model, time_since, calc_f1, accuracy
@@ -122,7 +122,7 @@ if __name__ == '__main__':
     print(f"valid loader {len(valid_loader)}")
 
     model = Cnn(1, len(labels)).to(device)
-
+    model.apply(weight_init)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
                                                     steps_per_epoch=int(len(train_loader)),
