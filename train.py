@@ -9,6 +9,7 @@ from src.dataset import SCDataset
 import os
 from src.utils import save_model, time_since, calc_f1, accuracy
 import torchaudio
+import numpy as np
 
 parser = argparse.ArgumentParser(description='train')
 parser.add_argument('--batch-size', type=int, default=100)
@@ -17,10 +18,10 @@ parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
 parser.add_argument('--grad-clip', default=1, help='gradient clipping value')
 parser.add_argument('--model-dir', default='trained_models', help='dir saving model')
 parser.add_argument('--hidden-size', default=64)
+parser.add_argument('--log-interval', default=20)
 parser.add_argument('--data-dir', default="data", help='')
 
 args = parser.parse_args(args=[])
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 exp_name = f'{os.path.basename(__file__).rstrip(".py")}_{datetime.now().strftime("%m-%d-%Y_%H:%M:%S")}'
@@ -28,52 +29,62 @@ writer = SummaryWriter(f"runs/{exp_name}")
 writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
     '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 
-def train(epoch, train_loader, valid_loader, criterion, scheduler, start):
-    train_loss = 0
-    train_accuracy = 0
-    model.train()
-    epoch_start = time.time()
-    for i, (spectogram, label) in enumerate(train_loader, 1):
-        pred = model(spectogram)
-        loss = criterion(pred, label)
-        train_loss += loss.data.item()
-        model.zero_grad()
-        loss.backward()
-        if args.grad_clip:
-            nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-        optimizer.step()
-        scheduler.step()
-        train_accuracy += accuracy(pred, label)
+args.seed = int(time.time())
+np.random.seed(args.seed)
+torch.manual_seed(args.seed)
 
-    print('[{}] Train Epoch: {} Loss: {:.2f} Accuracy: {:.6f} Seconds per epoch: {:d}'.format(time_since(start),
-                                                                                              epoch, train_loss,
-                                                                                              100 * train_accuracy/len(train_loader.dataset),
-                                                                                              int((time.time() - epoch_start))))
-
-    writer.add_scalar("train/spe", int((time.time() - epoch_start)), epoch)
-    writer.add_scalar("train/loss", train_loss, epoch)
-    writer.add_scalar("train/accuracy", 100 * train_accuracy/len(train_loader.dataset), epoch)
-    valid_loss = 0
-    valid_accuracy = 0
-    valid_epoch_pred = []
-    valid_epoch_target = []
-    model.eval()
-    with torch.no_grad():
-        for i, (spectrogram, label) in enumerate(valid_loader, 1):
-            pred = model(spectrogram)
+def train(train_loader, valid_loader, optimizer, criterion, scheduler, start):
+    global_step = 0
+    for epoch in range(1, args.epochs + 1):
+        train_loss = 0
+        train_accuracy = 0
+        model.train()
+        epoch_start = time.time()
+        for i, (spectogram, label) in enumerate(train_loader, 1):
+            pred = model(spectogram)
             loss = criterion(pred, label)
-            valid_loss += loss.data.item()
-            valid_accuracy += accuracy(pred, label)
-            valid_epoch_pred.append(pred)
-            #valid_epoch_target.append(label)
+            train_loss += loss.data.item()
+            model.zero_grad()
+            loss.backward()
+            if global_step % args.log_interval == 0:
+                grad_norm = sum(p.grad.detach().data.norm(2).item() ** 2 for p in model.parameters()) ** 0.5
+                writer.add_scalar("train/grad_norm", grad_norm, global_step)
+                writer.add_scalar("train/lr", float(optimizer.param_groups[0]['lr']), global_step)
+            if args.grad_clip:
+                nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            optimizer.step()
+            scheduler.step()
+            train_accuracy += accuracy(pred, label)
+            global_step += 1
 
-    #valid_f1 = calc_f1(torch.cat(valid_epoch_pred), torch.cat(valid_epoch_target))
-    writer.add_scalar("valid/loss", valid_loss, epoch)
-    writer.add_scalar("valid/accuracy", 100 * valid_accuracy/len(valid_loader.dataset), epoch)
-    #writer.add_scalar("valid/F1", valid_f1, epoch)
-    print('[{}] Valid Epoch: {} Loss: {:.6f} Accuracy: {:.2f} F1: :.6f'.format(time_since(start), epoch, valid_loss,
-                                                                               100 * valid_accuracy/len(valid_loader.dataset), 0))
-    return
+        print('[{}] Train Epoch: {} Loss: {:.2f} Accuracy: {:.6f} Seconds per epoch: {:d}'.format(time_since(start),
+                                                                                                  epoch, train_loss,
+                                                                                                  100 * train_accuracy/len(train_loader.dataset),
+                                                                                                  int((time.time() - epoch_start))))
+
+        writer.add_scalar("train/spe", int((time.time() - epoch_start)), epoch)
+        writer.add_scalar("train/loss", train_loss, epoch)
+        writer.add_scalar("train/accuracy", 100 * train_accuracy/len(train_loader.dataset), epoch)
+        valid_loss = 0
+        valid_accuracy = 0
+        valid_epoch_pred = []
+        valid_epoch_target = []
+        model.eval()
+        with torch.no_grad():
+            for i, (spectrogram, label) in enumerate(valid_loader, 1):
+                pred = model(spectrogram)
+                loss = criterion(pred, label)
+                valid_loss += loss.data.item()
+                valid_accuracy += accuracy(pred, label)
+                valid_epoch_pred.append(pred)
+                #valid_epoch_target.append(label)
+
+        #valid_f1 = calc_f1(torch.cat(valid_epoch_pred), torch.cat(valid_epoch_target))
+        writer.add_scalar("valid/loss", valid_loss, epoch)
+        writer.add_scalar("valid/accuracy", 100 * valid_accuracy/len(valid_loader.dataset), epoch)
+        #writer.add_scalar("valid/F1", valid_f1, epoch)
+        print('[{}] Valid Epoch: {} Loss: {:.6f} Accuracy: {:.2f} F1: :.6f'.format(time_since(start), epoch, valid_loss,
+                                                                                   100 * valid_accuracy/len(valid_loader.dataset), 0))
 
 def collate_fn(batch, labels_list, transforms, device):
     audios, labels = [], []
@@ -121,8 +132,7 @@ if __name__ == '__main__':
     criterion = torch.nn.CrossEntropyLoss().to(device)
     start = time.time()
     print("Training for %d epochs..." % args.epochs)
-    for epoch in range(1, args.epochs + 1):
-        train(epoch, train_loader, valid_loader, criterion, scheduler, start)
+    train(train_loader, valid_loader, optimizer, criterion, scheduler, start)
 
     #save_model(model)
 
