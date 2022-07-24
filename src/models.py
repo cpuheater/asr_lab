@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class Cnn(nn.Module):
     def __init__(self, channels: int, output_size: int):
         super(Cnn, self).__init__()

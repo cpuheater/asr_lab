@@ -4,38 +4,32 @@ from datetime import datetime
 import time
 import torch
 import torch.nn as nn
-from src.model import Cnn, weight_init
+from src.models import Cnn, weight_init
 from src.dataset import SCDataset
 import os
 from src.utils import save_model, time_since, calc_f1, accuracy
 import torchaudio
 import numpy as np
+from hydra import compose, initialize
+from omegaconf import OmegaConf
 
-parser = argparse.ArgumentParser(description='train')
-parser.add_argument('--batch-size', type=int, default=100)
-parser.add_argument('--epochs', type=int, default=60, help='number of epochs')
-parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
-parser.add_argument('--grad-clip', default=1, help='gradient clipping value')
-parser.add_argument('--model-dir', default='trained_models', help='dir saving model')
-parser.add_argument('--hidden-size', default=64)
-parser.add_argument('--log-interval', default=20)
-parser.add_argument('--data-dir', default="data", help='')
-
-args = parser.parse_args(args=[])
+initialize(version_base=None, config_path="conf", job_name="asr")
+cfg = compose(config_name="config")
+print(OmegaConf.to_yaml(cfg))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 exp_name = f'{os.path.basename(__file__).rstrip(".py")}_{datetime.now().strftime("%m-%d-%Y_%H:%M:%S")}'
 writer = SummaryWriter(f"runs/{exp_name}")
-writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
-    '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
+#writer.add_text('hyperparameters', "|param|value|\n|-|-|\n%s" % (
+#    '\n'.join([f"|{key}|{value}|" for key, value in vars(args).items()])))
 
-args.seed = int(time.time())
-np.random.seed(args.seed)
-torch.manual_seed(args.seed)
+now = int(time.time())
+np.random.seed(now)
+torch.manual_seed(now)
 
-def train(train_loader, valid_loader, optimizer, criterion, scheduler, start):
+def train(train_loader, valid_loader, optim, criterion, scheduler, start):
     global_step = 0
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, cfg.net.epochs + 1):
         train_loss = 0
         train_accuracy = 0
         model.train()
@@ -46,13 +40,13 @@ def train(train_loader, valid_loader, optimizer, criterion, scheduler, start):
             train_loss += loss.data.item()
             model.zero_grad()
             loss.backward()
-            if global_step % args.log_interval == 0:
+            if global_step % cfg.log.interval == 0:
                 grad_norm = sum(p.grad.detach().data.norm(2).item() ** 2 for p in model.parameters()) ** 0.5
                 writer.add_scalar("train/grad_norm", grad_norm, global_step)
-                writer.add_scalar("train/lr", float(optimizer.param_groups[0]['lr']), global_step)
-            if args.grad_clip:
-                nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            optimizer.step()
+                writer.add_scalar("train/lr", float(optim.param_groups[0]['lr']), global_step)
+            if cfg.net.grad_clip:
+                nn.utils.clip_grad_norm_(model.parameters(), cfg.net.grad_clip)
+            optim.step()
             scheduler.step()
             train_accuracy += accuracy(pred, label)
             global_step += 1
@@ -114,25 +108,25 @@ if __name__ == '__main__':
         torchaudio.transforms.AmplitudeToDB(),
     ).to(device)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=cfg.net.batch_size,
                                                shuffle=True,  collate_fn=lambda batch: collate_fn(batch, labels, train_transforms, device))
-    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size,
+    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=cfg.net.batch_size,
                                                shuffle=True, collate_fn=lambda batch: collate_fn(batch, labels, valid_transforms, device))
     print(f"train loader {len(train_loader)}")
     print(f"valid loader {len(valid_loader)}")
 
     model = Cnn(1, len(labels)).to(device)
     model.apply(weight_init)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr,
+    optim = torch.optim.Adam(model.parameters(), lr=cfg.net.optim.lr)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optim, max_lr=cfg.net.optim.lr,
                                                     steps_per_epoch=int(len(train_loader)),
-                                                    epochs=args.epochs,
+                                                    epochs=cfg.net.epochs,
                                                     anneal_strategy='linear')
 
     criterion = torch.nn.CrossEntropyLoss().to(device)
     start = time.time()
-    print("Training for %d epochs..." % args.epochs)
-    train(train_loader, valid_loader, optimizer, criterion, scheduler, start)
+    print("Training for %d epochs..." % cfg.net.epochs)
+    train(train_loader, valid_loader, optim, criterion, scheduler, start)
 
     #save_model(model)
 

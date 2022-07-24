@@ -1,0 +1,18 @@
+#config file
+
+net:
+  optim:
+    lr: 0.001
+    type: adam
+  rnn:
+    hidden_size: 64
+  grad_clip: 1
+  batch_size: 100
+  epochs: 60
+  savedir: trained_models
+
+log:
+  interval: 20
+
+dataset:
+  path: data
